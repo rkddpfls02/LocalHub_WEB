@@ -8,16 +8,33 @@ const festivals = ref([])
 const loading = ref(false)
 const errorMessage = ref('')
 const weekDays = ['일', '월', '화', '수', '목', '금', '토']
+const eventColors = [
+  { solid: '#168ac7', soft: '#d9effc' },
+  { solid: '#7c5cc4', soft: '#ebe5fa' },
+  { solid: '#16866f', soft: '#dff4ee' },
+  { solid: '#d06a3b', soft: '#fbe9df' },
+  { solid: '#c34f72', soft: '#fae3ea' },
+  { solid: '#82711e', soft: '#f5f0d7' }
+]
 
-const calendarEvents = computed(() => festivals.value.flatMap((festival) =>
-  dateRange(festival.startDate, festival.endDate).map((date) => ({
+const calendarEvents = computed(() => festivals.value.flatMap((festival) => {
+  const duration = festivalDuration(festival)
+  if (duration > 30) return []
+
+  return dateRange(festival.startDate, festival.endDate).map((date) => ({
     date,
     title: festival.title,
     area: festival.addr1,
     period: `${festival.startDate} - ${festival.endDate}`,
-    type: 'festival'
+    type: 'festival',
+    color: festivalColor(festival.title),
+    showTitle: duration <= 7 || date === festival.startDate
   }))
-))
+}))
+
+const longRunningFestivals = computed(() =>
+  festivals.value.filter((festival) => festivalDuration(festival) > 30)
+)
 
 const year = computed(() => viewDate.value.getFullYear())
 const month = computed(() => viewDate.value.getMonth())
@@ -36,11 +53,16 @@ const calendarDays = computed(() => {
     if (dayOffset <= 0) date = new Date(year.value, month.value - 1, previousLastDate + dayOffset)
 
     const key = formatDate(date)
+    const events = eventsForDate(date)
+    const titledEvents = events.filter((event) => event.showTitle)
+    const continuingEvents = events.filter((event) => !event.showTitle)
     return {
       key,
       day: date.getDate(),
       currentMonth: date.getMonth() === month.value,
-      events: eventsForDate(date)
+      events,
+      titledEvents,
+      continuingEvents
     }
   })
 })
@@ -71,6 +93,23 @@ function formatDate(date) {
 function eventsForDate(date) {
   const key = formatDate(date)
   return calendarEvents.value.filter((event) => event.date === key)
+}
+
+function festivalDuration(festival) {
+  const start = new Date(`${festival.startDate}T00:00:00`)
+  const end = new Date(`${festival.endDate}T00:00:00`)
+  return Math.floor((end - start) / 86400000) + 1
+}
+
+function festivalColor(title) {
+  let hash = 0
+  for (const character of title) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0
+  return eventColors[Math.abs(hash) % eventColors.length]
+}
+
+function eventColorStyle(title) {
+  const color = festivalColor(title)
+  return { '--event-color': color.solid, '--event-soft': color.soft }
 }
 
 async function loadFestivals(targetDate) {
@@ -133,15 +172,29 @@ onMounted(() => loadFestivals(viewDate.value))
             @click="selectDay(day)"
           >
             <span class="day-number">{{ day.day }}</span>
-            <span
-              v-for="event in day.events.slice(0, 2)"
-              :key="`${event.title}-${event.type}`"
-              class="event-chip"
-              :class="event.type"
-            >
-              {{ event.title }}
+            <span class="day-event-content">
+              <span
+                v-for="event in day.titledEvents.slice(0, 2)"
+                :key="`${event.title}-${event.type}`"
+                class="event-chip"
+                :class="event.type"
+                :title="event.title"
+                :style="{ '--event-color': event.color.solid, '--event-soft': event.color.soft }"
+              >
+                {{ event.title }}
+              </span>
+              <span v-if="day.continuingEvents.length" class="ongoing-badge">
+                <span class="ongoing-colors" aria-hidden="true">
+                  <i
+                    v-for="event in day.continuingEvents.slice(0, 4)"
+                    :key="event.title"
+                    :style="{ backgroundColor: event.color.solid }"
+                  ></i>
+                </span>
+                진행 중 {{ day.continuingEvents.length }}
+              </span>
+              <small v-if="day.titledEvents.length > 2">+{{ day.titledEvents.length - 2 }}</small>
             </span>
-            <small v-if="day.events.length > 2">+{{ day.events.length - 2 }}</small>
           </button>
         </div>
       </div>
@@ -151,7 +204,7 @@ onMounted(() => loadFestivals(viewDate.value))
         <h3>{{ selectedLabel }}</h3>
         <div v-if="selectedEvents.length" class="day-events">
           <article v-for="event in selectedEvents" :key="`${event.title}-${event.type}`">
-            <span :class="event.type"></span>
+            <span :class="event.type" :style="{ backgroundColor: event.color.solid }"></span>
             <div>
               <strong>{{ event.title }}</strong>
               <p>{{ event.area }}</p>
@@ -162,6 +215,19 @@ onMounted(() => loadFestivals(viewDate.value))
         <div v-else-if="loading" class="no-event">축제 일정을 불러오는 중입니다.</div>
         <div v-else-if="errorMessage" class="no-event error-message">{{ errorMessage }}</div>
         <div v-else class="no-event">등록된 일정이 없어요.<br />다른 날짜를 선택해 보세요.</div>
+
+        <div v-if="longRunningFestivals.length" class="long-running-events">
+          <span>장기·상시 행사</span>
+          <article
+            v-for="festival in longRunningFestivals"
+            :key="`${festival.title}-${festival.startDate}`"
+            :style="eventColorStyle(festival.title)"
+          >
+            <strong>{{ festival.title }}</strong>
+            <p>{{ festival.addr1 }}</p>
+            <small>{{ festival.startDate }} - {{ festival.endDate }}</small>
+          </article>
+        </div>
       </aside>
     </div>
 
@@ -190,15 +256,19 @@ onMounted(() => loadFestivals(viewDate.value))
 .week-row span:first-child { color: #eb6d79; }
 .week-row span:last-child { color: #287fca; }
 .month-grid { border-top: 1px solid #cae5f7; border-left: 1px solid #cae5f7; }
-.calendar-day { min-width: 0; min-height: 116px; border: 0; border-right: 1px solid #cae5f7; border-bottom: 1px solid #cae5f7; background: #fff; padding: 9px 7px; text-align: left; cursor: pointer; overflow: hidden; }
+.calendar-day { min-width: 0; min-height: 116px; border: 0; border-right: 1px solid #cae5f7; border-bottom: 1px solid #cae5f7; background: #fff; padding: 9px 7px; display: flex; flex-direction: column; align-items: stretch; text-align: left; cursor: pointer; overflow: hidden; }
 .calendar-day:hover { background: #f3faff; }
 .calendar-day.selected { background: #e7f5ff; box-shadow: inset 0 0 0 2px #49a9df; }
 .calendar-day.muted { background: #f8fbfd; color: #afc0ca; }
-.day-number { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 850; }
-.event-chip { display: block; overflow: hidden; margin-top: 4px; border-radius: 5px; padding: 5px 6px; color: #07476e; font-size: 10px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
-.event-chip.festival { background: #b9e0fd; }
+.day-number { display: flex; flex: none; height: 18px; align-items: flex-start; margin-bottom: 4px; font-size: 12px; font-weight: 850; line-height: 1; }
+.day-event-content { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.event-chip { display: block; overflow: hidden; width: 100%; border-radius: 5px; padding: 5px 6px; color: #07476e; font-size: 10px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.event-chip.festival { background: var(--event-soft, #b9e0fd); color: var(--event-color, #07476e); }
 .event-chip.music { background: #d9cdfb; color: #4f378e; }
 .event-chip.weekly { background: #c8f1e7; color: #12604f; }
+.ongoing-badge { max-width: 100%; border-radius: 3px; background: #edf5fa; color: #416b84; padding: 3px 6px; display: flex; align-items: center; gap: 5px; font-size: 9px; font-weight: 850; white-space: nowrap; }
+.ongoing-colors { display: flex; gap: 2px; }
+.ongoing-colors i { width: 5px; height: 10px; border-radius: 2px; }
 .calendar-day small { color: #168ac7; font-weight: 800; }
 .day-panel { border-left: 1px solid #cae5f7; background: #f5fbff; padding: 30px 24px; }
 .day-panel > p { margin: 0; }
@@ -213,6 +283,12 @@ onMounted(() => loadFestivals(viewDate.value))
 .day-events small { color: #168ac7; font-weight: 750; }
 .no-event { border: 1px dashed #b8d9ed; border-radius: 14px; padding: 20px 12px; color: #7793a6; text-align: center; font-size: 13px; line-height: 1.6; }
 .error-message { border-color: #e5aeb4; color: #b64b57; }
+.long-running-events { display: grid; gap: 9px; margin-top: 24px; border-top: 1px solid #d5eaf8; padding-top: 20px; }
+.long-running-events > span { color: #168ac7; font-size: 11px; font-weight: 900; letter-spacing: .08em; }
+.long-running-events article { border: 1px solid #d5eaf8; border-left: 4px solid var(--event-color); border-radius: 12px; background: var(--event-soft); padding: 12px; }
+.long-running-events strong { display: block; color: #073b66; font-size: 13px; }
+.long-running-events p { margin: 5px 0; color: #607d91; font-size: 11px; line-height: 1.4; }
+.long-running-events small { color: #168ac7; font-size: 10px; font-weight: 750; }
 .coming-events { display: grid; gap: 7px; margin-top: 24px; border-top: 1px solid #d5eaf8; padding-top: 20px; }
 .coming-events span { color: #7793a6; font-size: 11px; font-weight: 850; }
 .coming-events strong { color: #126fa7; font-size: 12px; }
