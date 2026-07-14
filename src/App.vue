@@ -272,7 +272,7 @@ async function sendChat() {
       </section>
 
       <section class="container calendar-section">
-        <FestivalCalendar :festivals="festivalCategory.items" />
+        <FestivalCalendar />
       </section>
     </template>
 

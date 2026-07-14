@@ -1,33 +1,23 @@
 <script setup>
-import { computed, ref } from 'vue'
-
-const props = defineProps({
-  festivals: {
-    type: Array,
-    required: true
-  }
-})
+import { computed, onMounted, ref } from 'vue'
+import { fetchFestivals } from '../api/festival'
 
 const viewDate = ref(new Date(2026, 7, 1))
 const selectedDate = ref('2026-08-01')
+const festivals = ref([])
+const loading = ref(false)
+const errorMessage = ref('')
 const weekDays = ['일', '월', '화', '수', '목', '금', '토']
 
-const fixedEvents = computed(() => [
-  ...dateRange('2026-08-01', '2026-08-03').map((date) => ({
+const calendarEvents = computed(() => festivals.value.flatMap((festival) =>
+  dateRange(festival.startDate, festival.endDate).map((date) => ({
     date,
-    title: props.festivals[0]?.title,
-    area: props.festivals[0]?.area,
-    period: props.festivals[0]?.period,
+    title: festival.title,
+    area: festival.addr1,
+    period: `${festival.startDate} - ${festival.endDate}`,
     type: 'festival'
-  })),
-  ...dateRange('2026-09-18', '2026-09-20').map((date) => ({
-    date,
-    title: props.festivals[1]?.title,
-    area: props.festivals[1]?.area,
-    period: props.festivals[1]?.period,
-    type: 'music'
   }))
-])
+))
 
 const year = computed(() => viewDate.value.getFullYear())
 const month = computed(() => viewDate.value.getMonth())
@@ -60,8 +50,6 @@ const selectedLabel = computed(() => {
   const date = new Date(`${selectedDate.value}T00:00:00`)
   return `${date.getMonth() + 1}월 ${date.getDate()}일 ${weekDays[date.getDay()]}요일`
 })
-const undatedEvents = computed(() => props.festivals.filter((festival) => festival.period?.includes('예정')))
-
 function dateRange(start, end) {
   const dates = []
   const current = new Date(`${start}T00:00:00`)
@@ -82,24 +70,28 @@ function formatDate(date) {
 
 function eventsForDate(date) {
   const key = formatDate(date)
-  const events = fixedEvents.value.filter((event) => event.date === key && event.title)
-
-  if (date.getDay() === 6 && props.festivals[2]) {
-    events.push({
-      date: key,
-      title: props.festivals[2].title,
-      area: props.festivals[2].area,
-      period: props.festivals[2].period,
-      type: 'weekly'
-    })
-  }
-
-  return events
+  return calendarEvents.value.filter((event) => event.date === key)
 }
 
-function moveMonth(amount) {
-  viewDate.value = new Date(year.value, month.value + amount, 1)
+async function loadFestivals(targetDate) {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const data = await fetchFestivals(targetDate.getFullYear(), targetDate.getMonth() + 1)
+    festivals.value = data.items
+  } catch (error) {
+    festivals.value = []
+    errorMessage.value = error instanceof Error ? error.message : '축제 일정을 불러오지 못했습니다.'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function moveMonth(amount) {
+  const targetDate = new Date(year.value, month.value + amount, 1)
+  viewDate.value = targetDate
   selectedDate.value = formatDate(viewDate.value)
+  await loadFestivals(targetDate)
 }
 
 function selectDay(day) {
@@ -109,6 +101,8 @@ function selectDay(day) {
     viewDate.value = new Date(date.getFullYear(), date.getMonth(), 1)
   }
 }
+
+onMounted(() => loadFestivals(viewDate.value))
 </script>
 
 <template>
@@ -119,9 +113,9 @@ function selectDay(day) {
         <h2>부산의 이번 달 즐길 거리</h2>
       </div>
       <div class="month-control" aria-label="달력 월 이동">
-        <button aria-label="이전 달" @click="moveMonth(-1)">←</button>
+        <button aria-label="이전 달" :disabled="loading" @click="moveMonth(-1)">←</button>
         <strong>{{ monthLabel }}</strong>
-        <button aria-label="다음 달" @click="moveMonth(1)">→</button>
+        <button aria-label="다음 달" :disabled="loading" @click="moveMonth(1)">→</button>
       </div>
     </div>
 
@@ -165,14 +159,9 @@ function selectDay(day) {
             </div>
           </article>
         </div>
+        <div v-else-if="loading" class="no-event">축제 일정을 불러오는 중입니다.</div>
+        <div v-else-if="errorMessage" class="no-event error-message">{{ errorMessage }}</div>
         <div v-else class="no-event">등록된 일정이 없어요.<br />다른 날짜를 선택해 보세요.</div>
-
-        <div v-if="undatedEvents.length" class="coming-events">
-          <span>날짜 확정 예정</span>
-          <strong v-for="event in undatedEvents" :key="event.title">
-            {{ event.period }} · {{ event.title }}
-          </strong>
-        </div>
       </aside>
     </div>
 
@@ -191,6 +180,7 @@ function selectDay(day) {
 .schedule-topline h2 { margin: 5px 0 0; color: #073b66; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.04em; }
 .month-control { display: flex; align-items: center; gap: 12px; border-radius: 999px; background: rgba(255,255,255,.78); padding: 6px; color: #073b66; }
 .month-control button { width: 38px; height: 38px; border: 0; border-radius: 50%; background: #fff; color: #126fa7; cursor: pointer; }
+.month-control button:disabled { cursor: wait; opacity: .5; }
 .month-control strong { min-width: 104px; text-align: center; }
 .schedule-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; }
 .calendar-wrap { min-width: 0; padding: 24px; }
@@ -222,6 +212,7 @@ function selectDay(day) {
 .day-events p { margin: 5px 0; color: #607d91; font-size: 12px; }
 .day-events small { color: #168ac7; font-weight: 750; }
 .no-event { border: 1px dashed #b8d9ed; border-radius: 14px; padding: 20px 12px; color: #7793a6; text-align: center; font-size: 13px; line-height: 1.6; }
+.error-message { border-color: #e5aeb4; color: #b64b57; }
 .coming-events { display: grid; gap: 7px; margin-top: 24px; border-top: 1px solid #d5eaf8; padding-top: 20px; }
 .coming-events span { color: #7793a6; font-size: 11px; font-weight: 850; }
 .coming-events strong { color: #126fa7; font-size: 12px; }
